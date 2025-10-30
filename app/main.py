@@ -4,10 +4,6 @@ from .schemas import User
 app = FastAPI()
 users: list[User] = []
 
-@app.get("/health")
-def get_health():
-    return {"status": "ok"}
-
 #return all users 
 @app.get("/api/users")
 def get_users():
@@ -25,8 +21,6 @@ def get_user(user_id: int):
 def add_user(user: User):
     if any(u.user_id == user.user_id for u in users):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="user_id already exists")
-    if any(u.student_id == user.student_id for u in users): #If an existing student ID exists, don't add user
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="student_id already exists")
     users.append(user)
     return user
 
