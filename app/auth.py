@@ -3,37 +3,18 @@ import hashlib
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from .database import get_db
 from .models import UserDB, SessionDB
+from .schemas import LoginRequest, LoginResponse, UserResponse
 
 # All routes in this file will be prefixed with /api/auth
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# How long a session stays valid after login
+# How long a session token stays valid after login
 SESSION_TTL_HOURS = 8
-
-
-# ── Schemas ───────────────────────────────────────────────────────────────────
-# Pydantic models that define the shape of request and response bodies.
-# FastAPI uses these to automatically validate incoming data and
-# serialise outgoing data.
-
-class LoginRequest(BaseModel):
-    """What the client sends when logging in."""
-    username: str
-    password: str
-
-
-class LoginResponse(BaseModel):
-    """What the server sends back on a successful login."""
-    token: str       # the session token the client must include in future requests
-    username: str
-    role: str
-    expires_at: datetime
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -48,11 +29,10 @@ def _hash_password(password: str) -> str:
 
 def _create_session(user: UserDB, db: Session) -> SessionDB:
     """
-    Create a new session for a user after a successful login.
-    Generates a cryptographically random token, sets an expiry time,
-    saves it to the database, and returns the session object.
+    Create a new session record for a user after a successful login.
+    Generates a cryptographically secure random token and saves it to the database.
     """
-    # secrets.token_hex gives us a secure random token (64 hex chars)
+    # secrets.token_hex gives us a secure random 64-character hex string
     token = secrets.token_hex(32)
     expires = datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)
 
@@ -69,11 +49,9 @@ def _create_session(user: UserDB, db: Session) -> SessionDB:
 
 def _validate_token(token: str, db: Session) -> SessionDB:
     """
-    Check that a token exists in the database and has not expired.
-    Raises a 401 error if the token is invalid or expired.
-    Expired tokens are deleted from the database automatically.
+    Check that a token exists and has not expired.
+    Raises 401 if invalid. Expired tokens are deleted automatically.
     """
-    # Look up the session by token
     session = db.execute(
         select(SessionDB).where(SessionDB.token == token)
     ).scalar_one_or_none()
@@ -81,28 +59,28 @@ def _validate_token(token: str, db: Session) -> SessionDB:
     if not session:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired session token"
+            detail="Invalid or expired session token",
         )
 
-    # If the token has passed its expiry time, clean it up and reject
+    # Clean up and reject expired tokens
     if session.expires_at < datetime.utcnow():
         db.delete(session)
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session expired – please log in again"
+            detail="Session expired – please log in again",
         )
 
     return session
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     """
     Authenticate a user with username and password.
-    On success, creates a session and returns a token.
+    Returns a session token on success.
     Returns 401 if credentials are wrong, 403 if the account is disabled.
     """
     # Look up the user by username
@@ -110,8 +88,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         select(UserDB).where(UserDB.username == payload.username)
     ).scalar_one_or_none()
 
-    # Reject if user doesn't exist or password hash doesn't match.
-    # We check both in one condition to avoid revealing which one failed
+    # Check both user existence and password in one condition.
+    # This avoids revealing whether the username or password was wrong
     # (prevents username enumeration attacks).
     if not user or user.hashed_password != _hash_password(payload.password):
         raise HTTPException(
@@ -119,14 +97,14 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             detail="Incorrect username or password",
         )
 
-    # Reject if the account has been disabled by an admin
+    # Reject disabled accounts
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled",
         )
 
-    # Credentials are valid — create and return a session
+    # All checks passed — create and return a session
     session = _create_session(user, db)
     return LoginResponse(
         token=session.token,
@@ -139,9 +117,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(token: str, db: Session = Depends(get_db)):
     """
-    Invalidate a session token.
-    Deletes the session from the database so the token can no longer be used.
-    If the token doesn't exist, we do nothing (already logged out).
+    Invalidate a session token by deleting it from the database.
+    If the token doesn't exist we do nothing — already logged out.
     """
     session = db.execute(
         select(SessionDB).where(SessionDB.token == token)
@@ -152,15 +129,15 @@ def logout(token: str, db: Session = Depends(get_db)):
         db.commit()
 
 
-@router.get("/me")
+@router.get("/me", response_model=UserResponse)
 def me(token: str, db: Session = Depends(get_db)):
     """
-    Return the currently logged-in user's info based on their session token.
+    Return the current user's info based on their session token.
     Used by the GUI to verify a session is still valid and get the username/role.
     """
-    # Validate the token first — raises 401 if invalid or expired
+    # Validate the token — raises 401 if invalid or expired
     session = _validate_token(token, db)
 
     # Fetch the user the session belongs to
     user = db.get(UserDB, session.user_id)
-    return {"username": user.username, "role": user.role}
+    return UserResponse(username=user.username, role=user.role)
