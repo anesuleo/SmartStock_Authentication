@@ -1,15 +1,3 @@
-"""
-app/auth.py
-
-Authentication microservice router.
-Mounted at /api/auth in main.py.
-
-Endpoints:
-  POST /api/auth/login   – validate credentials, return session token
-  POST /api/auth/logout  – invalidate session token
-  GET  /api/auth/me      – return current user info from token
-"""
-
 import secrets
 import hashlib
 from datetime import datetime, timedelta
