@@ -33,7 +33,7 @@ jobs:
   build-and-push:
     needs: test   # only build if tests pass
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
       contents: read
