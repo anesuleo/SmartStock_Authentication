@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+
+  # ── Postgres database for the auth service ────────────────────────────────
+  auth-db:
+    image: postgres:17-alpine
+    container_name: auth_db
+    env_file: .env.docker
+    ports:
+      - "5434:5432"   # host:container — using 5434 to avoid clashing with inventory db on 5433
+    volumes:
+      - auth-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d authdb"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Auth microservice ─────────────────────────────────────────────────────
+  auth-service:
+    build: .
+    container_name: auth_service
+    env_file: .env.docker
+    environment:
+      APP_ENV: docker
+    depends_on:
+      auth-db:
+        condition: service_healthy   # wait for Postgres to be ready before starting
+    ports:
+      - "8001:8000"   # host:container
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+volumes:
+  auth-postgres-data:
